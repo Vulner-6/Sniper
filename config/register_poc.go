@@ -8,6 +8,8 @@ func GetPocMapAndSoPath() (map[string]string, string) {
 	poc_map := map[string]string{
 		// 填写对应的插件代码名称和标志
 		"myplugin.go": "MyPlugin",
+		"do.go":       "MyDo",
+		"say.go":      "Poc_CVE_2021",
 	}
 
 	// 返回插件映射关系与插件目录路径

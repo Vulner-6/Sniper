@@ -14,6 +14,7 @@ func (p cve_2023) Run(target string) string {
 	// 插件的具体实现...
 	time.Sleep(time.Second * 5)
 	fmt.Printf(target + " Plugin Worker done\n")
+	// 若漏洞不存在，则返回""字符串
 	return "发现目标：" + target + "存在cve_2023漏洞！"
 }
 

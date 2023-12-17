@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"time"
 )
 
 // Poc 接口定义了插件的基本要求
@@ -44,69 +43,6 @@ func getFileName(path string) string {
 	filename := base[:len(base)-len(filepath.Ext(base))]
 	return filename
 }
-
-/*
-// 加载指定目录的全部插件，多个插件同时扫描多个url
-func LoadAllPlugins(urlList []string, pocThread string, urlThread string) {
-	// 类型转换
-	pocThreadInt, err := strconv.Atoi(pocThread)
-
-	if err != nil {
-		fmt.Println("pocThread string 转换成 pocThreadInt int 失败")
-	}
-
-	urlThreadInt, err := strconv.Atoi(urlThread)
-	if err != nil {
-		fmt.Println("urlThread string 转换成 urlThreadInt int 失败")
-	}
-
-	url_num:=len(urlList);
-
-	// 获取插件目录下的所有文件
-	files, err := filepath.Glob(filepath.Join(pluginsDir, "*"+pluginSuffix()))
-	file_num := len(files)
-
-	if err != nil {
-		fmt.Println("Error listing plugin files:", err)
-		os.Exit(1)
-	}
-	if files == nil {
-		fmt.Println("No plugins files ! Please check /plugins/compile/ directory !")
-		os.Exit(1)
-	}
-
-	// 遍历加载并执行每个插件
-	for _, file := range files {
-		p, err := plugin.Open(file)
-		if err != nil {
-			fmt.Println("Error opening plugin:", err)
-			continue
-		}
-		// 根据文件名，获取对应的标志
-		file_name := getFileName(file) + ".go"
-		poc_map := config.GetPocMapAndSoPath()
-		symName := poc_map[file_name]
-		// 根据插件定义的符号名获取插件对象
-		symbol, err := p.Lookup(symName)
-
-		if err != nil {
-			fmt.Println("Error finding symbol:", err)
-			continue
-		}
-
-		// 断言插件对象是否符合 Poc 接口
-		poc, ok := symbol.(Poc)
-		if !ok {
-			fmt.Println("Plugin does not implement Poc interface")
-			continue
-		}
-
-		// 执行插件
-		result := poc.Run()
-		fmt.Printf("Plugin %s result: %s\n", file, result)
-	}
-}
-*/
 
 // 执行单个插件，扫描单个目标
 func LoadOnePluginScanOne(target string, plugin_name string, resultChan chan<- string, wg *sync.WaitGroup) {
@@ -145,16 +81,24 @@ func LoadOnePluginScanOne(target string, plugin_name string, resultChan chan<- s
 	// return result
 }
 
-// 从channel缓冲区中读取数据
-func ReadData(ch chan string) {
+// 从 channel 缓冲区中读取数据
+func ReadData(ch chan string, read_channel_wg *sync.WaitGroup, output string) {
 	x := <-ch // 从Channel接收数据
-	fmt.Println(x)
+	if x == "" {
+		fmt.Println("暂时未发现漏洞，获得空字符串,正在扫描中，请等待程序执行完毕....")
+		read_channel_wg.Done()
+	} else {
+		result := x + "\n\n"
+		// 将数据写入指定文件,好像不需要设置锁
+		WriteFileByLine(output, result)
+		fmt.Println(x)
+		read_channel_wg.Done()
+	}
 }
 
 // 执行单个插件，扫描多个目标
-func LoadOnePluginScanMore(targets []string, plugin_name string, target_thread string) {
+func LoadOnePluginScanMore(targets []string, plugin_name string, target_thread string, plugin_wg *sync.WaitGroup, output string) {
 	// 目标线程数字符串类型转整数类型
-
 	targetThreadInt, err := strconv.Atoi(target_thread)
 	if err != nil {
 		fmt.Println("target_thread string 转换成 targetThreadInt int 失败！")
@@ -162,82 +106,176 @@ func LoadOnePluginScanMore(targets []string, plugin_name string, target_thread s
 
 	// 创建等待组，用于等待所有goroutine执行完毕
 	var wg sync.WaitGroup
+	var read_channel_wg sync.WaitGroup
 	// 创建用于收集结果的通道
 	resultChan := make(chan string, targetThreadInt)
-	// 创建计数器
-	// thread_index := 0
 
-	/*
-		// 循环目标
-		for i := 0; i < len(targets); i++ {
-			// 计算缓冲区是否线程堆满
-			if thread_index < targetThreadInt {
-				wg.Add(1)
-				go LoadOnePluginScanOne(targets[i], plugin_name, resultChan, &wg)
-				thread_index = thread_index + 1
-			} else {
-				// 当缓冲区结果堆满后，必须将结果输出，才能继续填充缓冲区
-				// 等待除最后一批外所有goroutine执行完毕,确保缓冲区有正确数量的数据
-				wg.Wait()
-
-				thread_index = 0
-				// 打印结果通道中的结果
-				for result := range resultChan {
-					fmt.Println(result)
-				}
-
-			}
-
-		}
-
-	*/
-
-	// 计算批次
+	// 目标数量
 	target_num := len(targets)
-	/*
-		cycle_remainder := target_num % targetThreadInt
-		if cycle_remainder > 0 {
-			cycle_num := target_num/targetThreadInt + 1
-		} else {
-			cycle_num := target_num / targetThreadInt
-		}
-		current_cycle_index := 0
-	*/
 
-	// 循环目标
-	for i := 0; i < target_num; i++ {
-		// 累计线程数
-		wg.Add(1)
-		// 执行子线程
-		go LoadOnePluginScanOne(targets[i], plugin_name, resultChan, &wg)
-		go ReadData(resultChan)
-		/*
-			// 处理通道缓冲区
-			for r := 0; r < targetThreadInt; r++ {
-				result := <-resultChan
-				fmt.Println(result)
-			}
-		*/
+	// 若目标数量为0，则退出程序
+	if target_num == 0 {
+		fmt.Println("目标数量为0，未发现目标，退出程序！")
+		os.Exit(1)
 	}
 
-	// 等待所有goroutine执行完毕
-	wg.Wait()
+	// 判断目标数量是大于等于批次，还是小于批次
+	if target_num >= targetThreadInt {
+		// 若目标数量大于等于每批次数量
+		// 计算余数
+		cycle_remainder := target_num % targetThreadInt
+		// 不考虑余数的情况下计算批次
+		cycle_num := target_num / targetThreadInt
+		// 当前经过循环后的目标切片下标位置
+		var current_cycle_target_index = 0
+		for i := 0; i < cycle_num; i++ {
+			// 每批线程数根据获得的数字决定
+			for j := 0; j < targetThreadInt; j++ {
+				// 累计线程数
+				wg.Add(1)
+				read_channel_wg.Add(1)
+				// 计算下标
+				current_cycle_target_index = targetThreadInt*i + j
+				// 执行子线程
+				go LoadOnePluginScanOne(targets[current_cycle_target_index], plugin_name, resultChan, &wg)
+				go ReadData(resultChan, &read_channel_wg, output)
 
-	time.Sleep(time.Second * 10)
+				// 重置下标
+				current_cycle_target_index = 0
+			}
+
+			// 等待所有goroutine执行完毕
+			wg.Wait()
+			read_channel_wg.Wait()
+		}
+
+		// 如果有余数
+		if cycle_remainder > 0 {
+			// 余数对应的目标切片下标
+			target_index := cycle_num * targetThreadInt
+			// 根据线程数最后的余数循环1批
+			for i := 0; i < cycle_remainder; i++ {
+				// 累计线程数
+				wg.Add(1)
+				read_channel_wg.Add(1)
+
+				// 执行子线程,注意这里因为有余数，所以对应目标的切片下标就不再是这里的i了，而是需要自己计算
+				go LoadOnePluginScanOne(targets[target_index], plugin_name, resultChan, &wg)
+				go ReadData(resultChan, &read_channel_wg, output)
+				target_index++
+
+			}
+			// 等待所有goroutine执行完毕
+			wg.Wait()
+			read_channel_wg.Wait()
+		}
+
+	} else {
+		// 小于批次（目标数量小于设置的目标线程数）
+		for i := 0; i < target_num; i++ {
+			// 累计线程数
+			wg.Add(1)
+			read_channel_wg.Add(1)
+
+			// 执行子线程
+			go LoadOnePluginScanOne(targets[i], plugin_name, resultChan, &wg)
+			go ReadData(resultChan, &read_channel_wg, output)
+		}
+		// 等待所有goroutine执行完毕
+		wg.Wait()
+		read_channel_wg.Wait()
+	}
 
 	// 关闭结果通道，表示所有结果已经收集完毕
 	close(resultChan)
+	plugin_wg.Done()
 	fmt.Println("所有线程执行结束！")
 
 }
 
-// 执行多个插件，扫描单个目标
-func LoadMorePluginScanOne() {
-
-}
-
 // 执行多个插件，扫描多个目标
-func LoadMorePluginScanMore() {
+func LoadMorePluginScanMore(targets []string, plugins []string, target_thread string, plugin_thread string, output string) {
+	// 字符串转整数类型
+	pluginThreadInt, err := strconv.Atoi(plugin_thread)
+	if err != nil {
+		fmt.Println("plugin_thread string 转换成 pluginThreadInt int 失败！")
+	}
+
+	// 计算plugin数量
+	plugin_num := len(plugins)
+
+	// 声明插件多线程等待组
+	var plugin_wg sync.WaitGroup
+
+	// 若插件数量为0，则退出程序
+	if plugin_num == 0 {
+		fmt.Println("插件数量为0，未发现插件，退出程序！")
+		os.Exit(1)
+	}
+
+	// 判断插件数量大于等于插件线程数量，还是小于等于插件线程数量
+	if plugin_num >= pluginThreadInt {
+		// 计算余数
+		cycle_remainder := plugin_num % pluginThreadInt
+		// 不考虑余数的情况下计算批次
+		cycle_num := plugin_num / pluginThreadInt
+		// 当前经过循环后的插件切片下标位置
+		var current_cycle_plugin_index = 0
+
+		for i := 0; i < cycle_num; i++ {
+			// 每批线程数根据获得的数字决定
+			for j := 0; j < pluginThreadInt; j++ {
+				// 累计线程数
+				plugin_wg.Add(1)
+
+				// 计算下标
+				current_cycle_plugin_index = pluginThreadInt*i + j
+				// 执行子线程
+				go LoadOnePluginScanMore(targets, plugins[current_cycle_plugin_index], target_thread, &plugin_wg, output)
+
+				// 重置下标
+				current_cycle_plugin_index = 0
+			}
+
+			// 等待所有goroutine执行完毕
+			plugin_wg.Wait()
+
+		}
+
+		// 如果有余数
+		if cycle_remainder > 0 {
+			// 余数对应的插件切片下标
+			plugin_index := cycle_num * pluginThreadInt
+			// 根据线程数最后的余数循环1批
+			for i := 0; i < cycle_remainder; i++ {
+				// 累计线程数
+				plugin_wg.Add(1)
+
+				// 执行子线程,注意这里因为有余数，所以对应目标的切片下标就不再是这里的i了，而是需要自己计算
+				go LoadOnePluginScanMore(targets, plugins[plugin_index], target_thread, &plugin_wg, output)
+
+				plugin_index++
+
+			}
+			// 等待所有goroutine执行完毕
+			plugin_wg.Wait()
+
+		}
+
+	} else {
+		// 若插件数量小于插件线程数量
+		for i := 0; i < plugin_num; i++ {
+			// 累计线程数
+			plugin_wg.Add(1)
+
+			// 执行子线程
+			go LoadOnePluginScanMore(targets, plugins[i], target_thread, &plugin_wg, output)
+		}
+		// 等待所有goroutine执行完毕
+		plugin_wg.Wait()
+	}
+
+	fmt.Println("所有插件执行结束！")
 
 }
 
@@ -287,4 +325,23 @@ func ReadFileByLine(file_path string) []string {
 	*/
 
 	return lines
+}
+
+// 一一行行的写入字符串至文件
+func WriteFileByLine(file_path string, input string) {
+	// 打开文件，如果不存在则创建，文件权限为 0666，追加写入模式
+	file, err := os.OpenFile(file_path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	// 追加写入字符串到文件
+	_, err = file.WriteString(input)
+	if err != nil {
+		fmt.Println("Error writing to file:", err)
+		os.Exit(1)
+	}
+	fmt.Println("Content appended successfully.")
 }
