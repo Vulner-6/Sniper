@@ -85,6 +85,7 @@ var target_thread string
 var plugin_thread string
 var output string
 
+
 func init() {
 	rootCmd.AddCommand(runCmd)
 
@@ -100,6 +101,7 @@ func init() {
 	runCmd.Flags().StringVarP(&target_thread, "target_thread", "", "16", "指定一个插件扫描批量目标时的并发线程数，默认一个插件同时扫描16个url。")
 	runCmd.Flags().StringVarP(&plugin_thread, "plugin_thread", "", "16", "指定同时多个插件扫描批量目标时的并发线程数，默认16个插件线程同时扫描--target_thread指定的url数量。")
 	runCmd.Flags().StringVarP(&output, "output", "", result_file_name, "指定输出路径，默认输出至当前路径。")
+
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
